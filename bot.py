@@ -118,20 +118,19 @@ AWAITING_WELCOME = {}
 # 🤝 Auto Accept Request Handler
 async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     request = update.chat_join_request
-    chat_id = request.chat.id
     user_id = request.from_user.id
     user_name = request.from_user.first_name
 
-    # Approve Request
+    # १. Approve Request
     try:
-        await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+        await context.bot.approve_chat_join_request(chat_id=request.chat.id, user_id=user_id)
     except Exception as e:
         print(f"Error approving request: {e}")
 
     # Database मध्ये User Save करणे
     db_add_user(user_id)
 
-    # Send Welcome Message on Channel
+    # २. मेसेज तयार करणे
     backup_link = db_get_setting("backup_link")
     welcome_text = db_get_setting("welcome_text").format(name=user_name)
     welcome_photo = db_get_setting("welcome_photo")
@@ -139,35 +138,25 @@ async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard = [[InlineKeyboardButton("🔗 Join Backup Channel", url=backup_link)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # ३. मेसेज थेट USER च्या Private DM मध्ये पाठवणे (चॅनेलवर नाही)
     try:
         if welcome_photo:
-            sent_msg = await context.bot.send_photo(
-                chat_id=chat_id,
+            await context.bot.send_photo(
+                chat_id=user_id,  # 👈 इथे user_id दिल्यामुळे मेसेज डायरेक्ट युझरला जाईल
                 photo=welcome_photo,
                 caption=welcome_text,
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
         else:
-            sent_msg = await context.bot.send_message(
-                chat_id=chat_id,
+            await context.bot.send_message(
+                chat_id=user_id,  # 👈 इथे user_id दिल्यामुळे मेसेज डायरेक्ट युझरला जाईल
                 text=welcome_text,
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
-        
-        # ⏳ 5 Days Auto-Delete (432000 seconds)
-        asyncio.create_task(delete_msg_after_delay(context, chat_id, sent_msg.message_id, 432000))
-
     except Exception as e:
-        print(f"Error sending welcome message: {e}")
-
-async def delete_msg_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay_seconds: int):
-    await asyncio.sleep(delay_seconds)
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
-        pass
+        print(f"Could not send PM to user {user_id}: {e}")
 
 # 🎮 Admin Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -365,7 +354,7 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
     await status_msg.edit_text(
-        f"✅ **Forward Broadcast Completed!**\n\n"
+        f"✅ **Broadcast Completed!**\n\n"
         f"✅ Success : `{success}`\n"
         f"❌ Failed : `{failed}`",
         parse_mode="Markdown"
