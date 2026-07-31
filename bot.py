@@ -371,7 +371,6 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-    # ⏳ 24 Hours Auto-Delete Set (86400 seconds)
     asyncio.create_task(auto_delete_broadcast_after_delay(context, b_id, 86400))
 
     await status_msg.edit_text(
@@ -382,8 +381,7 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗑️ *Or use `/delete` to delete it right now!*",
         parse_mode="Markdown"
     )
-
-async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if not update.message.reply_to_message:
@@ -451,7 +449,6 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-    # ⏳ 24 Hours Auto-Delete Set (86400 seconds)
     asyncio.create_task(auto_delete_broadcast_after_delay(context, b_id, 86400))
 
     await status_msg.edit_text(
@@ -541,4 +538,17 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("backup", set_backup))
     app.add_handler(CommandHandler("setwelcome", set_welcome_cmd))
-    app.add_handler(CommandHandler("broadca
+    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
+    app.add_handler(CommandHandler("fbroadcast", forward_broadcast))
+    app.add_handler(CommandHandler("delete", delete_last_broadcast))
+    app.add_handler(CommandHandler("restart", restart_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
+
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_welcome_input))
+    app.add_handler(ChatJoinRequestHandler(auto_accept_request))
+
+    print("Bot is running...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
