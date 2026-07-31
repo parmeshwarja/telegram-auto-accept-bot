@@ -381,7 +381,8 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗑️ *Or use `/delete` to delete it right now!*",
         parse_mode="Markdown"
     )
-    async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if not update.message.reply_to_message:
@@ -540,7 +541,7 @@ def main():
     app.add_handler(CommandHandler("setwelcome", set_welcome_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("fbroadcast", forward_broadcast))
-    app.add_handler(CommandHandler("delete", delete_last_broadcast))
+        app.add_handler(CommandHandler("delete", delete_last_broadcast))
     app.add_handler(CommandHandler("restart", restart_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
 
