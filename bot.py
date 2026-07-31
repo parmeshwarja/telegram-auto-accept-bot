@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, ChatJoinRequestHandler, CommandHandler, ContextTypes
 
 # Render चा Timed Out टाळण्यासाठी छोटा Flask वेब सर्व्हर
-web_app = Flask(name)
+web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
