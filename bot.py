@@ -4,10 +4,11 @@ import sys
 import asyncio
 import sqlite3
 import time
+import json
 from datetime import datetime
 from threading import Thread
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application, 
     ChatJoinRequestHandler, 
@@ -56,12 +57,39 @@ def init_db():
             value TEXT
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS broadcasts (
+            broadcast_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS broadcast_messages (
+            broadcast_id INTEGER,
+            user_id INTEGER,
+            message_id INTEGER
+        )
+    ''')
     
     # Default Values setup
     cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('backup_link', 'https://t.me/+zBROkdncuC5iMzdl'))
     cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('welcome_text', "🌟 **Welcome to the family, {name}!**\n\n🔓 **Access Granted!** You're all set to dive in.\n🍿 Stay tuned for amazing content ahead!"))
     cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('welcome_photo', ''))
     conn.commit()
+
+    # 🔄 जुन्या users.json मधील डेटा SQLite मध्ये ट्रान्सफर करणे
+    if os.path.exists("users.json"):
+        try:
+            with open("users.json", "r") as f:
+                old_users = json.load(f)
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                for u_id in old_users:
+                    cursor.execute('INSERT OR IGNORE INTO users (user_id, joined_at) VALUES (?, ?)', (int(u_id), now))
+                conn.commit()
+                print(f"SUCCESS: Migrated {len(old_users)} old users to SQLite DB!")
+        except Exception as e:
+            print(f"Migration Error: {e}")
+
     conn.close()
 
 init_db()
@@ -112,6 +140,47 @@ def db_get_user_count():
     conn.close()
     return count
 
+def db_create_broadcast():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('INSERT INTO broadcasts (created_at) VALUES (?)', (now,))
+    b_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return b_id
+
+def db_save_broadcast_msg(b_id, user_id, msg_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO broadcast_messages (broadcast_id, user_id, message_id) VALUES (?, ?, ?)', (b_id, user_id, msg_id))
+    conn.commit()
+    conn.close()
+
+def db_get_last_broadcast():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT broadcast_id FROM broadcasts ORDER BY broadcast_id DESC LIMIT 1')
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def db_get_broadcast_msgs(b_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id, message_id FROM broadcast_messages WHERE broadcast_id = ?', (b_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def db_clear_broadcast_msgs(b_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM broadcast_messages WHERE broadcast_id = ?', (b_id,))
+    cursor.execute('DELETE FROM broadcasts WHERE broadcast_id = ?', (b_id,))
+    conn.commit()
+    conn.close()
+
 # State for /setwelcome
 AWAITING_WELCOME = {}
 
@@ -121,16 +190,13 @@ async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = request.from_user.id
     user_name = request.from_user.first_name
 
-    # १. Approve Request
     try:
         await context.bot.approve_chat_join_request(chat_id=request.chat.id, user_id=user_id)
     except Exception as e:
         print(f"Error approving request: {e}")
 
-    # Database मध्ये User Save करणे
     db_add_user(user_id)
 
-    # २. मेसेज तयार करणे
     backup_link = db_get_setting("backup_link")
     welcome_text = db_get_setting("welcome_text").format(name=user_name)
     welcome_photo = db_get_setting("welcome_photo")
@@ -138,25 +204,46 @@ async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard = [[InlineKeyboardButton("🔗 Join Backup Channel", url=backup_link)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # ३. मेसेज थेट USER च्या Private DM मध्ये पाठवणे (चॅनेलवर नाही)
     try:
         if welcome_photo:
-            await context.bot.send_photo(
-                chat_id=user_id,  # 👈 इथे user_id दिल्यामुळे मेसेज डायरेक्ट युझरला जाईल
+            sent_msg = await context.bot.send_photo(
+                chat_id=user_id,
                 photo=welcome_photo,
                 caption=welcome_text,
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
         else:
-            await context.bot.send_message(
-                chat_id=user_id,  # 👈 इथे user_id दिल्यामुळे मेसेज डायरेक्ट युझरला जाईल
+            sent_msg = await context.bot.send_message(
+                chat_id=user_id,
                 text=welcome_text,
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
+        
+        # ⏳ 5 Days Auto-Delete (432000 seconds)
+        asyncio.create_task(delete_msg_after_delay(context, user_id, sent_msg.message_id, 432000))
+
     except Exception as e:
         print(f"Could not send PM to user {user_id}: {e}")
+
+async def delete_msg_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay_seconds: int):
+    await asyncio.sleep(delay_seconds)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+async def auto_delete_broadcast_after_delay(context: ContextTypes.DEFAULT_TYPE, b_id: int, delay_seconds: int):
+    await asyncio.sleep(delay_seconds)
+    msgs = db_get_broadcast_msgs(b_id)
+    for user_id, msg_id in msgs:
+        try:
+            await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+    db_clear_broadcast_msgs(b_id)
 
 # 🎮 Admin Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -247,11 +334,13 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(all_users)
     success, failed = 0, 0
 
+    b_id = db_create_broadcast()
     status_msg = await update.message.reply_text(f"🚀 **Broadcast Started...**\nProgress: `0/{total}`", parse_mode="Markdown")
 
     for i, user in enumerate(all_users, start=1):
         try:
-            await context.bot.send_message(chat_id=user, text=message_text, parse_mode="Markdown")
+            m = await context.bot.send_message(chat_id=user, text=message_text, parse_mode="Markdown")
+            db_save_broadcast_msg(b_id, user, m.message_id)
             success += 1
         except (Forbidden, BadRequest):
             db_remove_user(user)
@@ -259,7 +348,8 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
             try:
-                await context.bot.send_message(chat_id=user, text=message_text, parse_mode="Markdown")
+                m = await context.bot.send_message(chat_id=user, text=message_text, parse_mode="Markdown")
+                db_save_broadcast_msg(b_id, user, m.message_id)
                 success += 1
             except Exception:
                 db_remove_user(user)
@@ -281,10 +371,15 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+    # ⏳ 24 Hours Auto-Delete Set (86400 seconds)
+    asyncio.create_task(auto_delete_broadcast_after_delay(context, b_id, 86400))
+
     await status_msg.edit_text(
         f"✅ **Broadcast Completed!**\n\n"
         f"✅ Success : `{success}`\n"
-        f"❌ Failed/Removed Dead Users : `{failed}`",
+        f"❌ Failed/Removed Dead Users : `{failed}`\n\n"
+        f"⏳ *This broadcast will Auto-Delete in 24 Hours.*\n"
+        f"🗑️ *Or use `/delete` to delete it right now!*",
         parse_mode="Markdown"
     )
 
@@ -300,6 +395,7 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(all_users)
     success, failed = 0, 0
 
+    b_id = db_create_broadcast()
     status_msg = await update.message.reply_text(f"🚀 **Forward Broadcast Started...**\nProgress: `0/{total}`", parse_mode="Markdown")
     backup_link = db_get_setting("backup_link")
     reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Join Backup Channel", url=backup_link)]])
@@ -307,7 +403,7 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, user in enumerate(all_users, start=1):
         try:
             if replied_msg.photo:
-                await context.bot.send_photo(
+                m = await context.bot.send_photo(
                     chat_id=user,
                     photo=replied_msg.photo[-1].file_id,
                     caption=replied_msg.caption if replied_msg.caption else "",
@@ -315,12 +411,13 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
             elif replied_msg.text:
-                await context.bot.send_message(
+                m = await context.bot.send_message(
                     chat_id=user,
                     text=replied_msg.text,
                     reply_markup=reply_markup,
                     parse_mode="Markdown"
                 )
+            db_save_broadcast_msg(b_id, user, m.message_id)
             success += 1
         except (Forbidden, BadRequest):
             db_remove_user(user)
@@ -329,9 +426,10 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(e.retry_after)
             try:
                 if replied_msg.photo:
-                    await context.bot.send_photo(chat_id=user, photo=replied_msg.photo[-1].file_id, caption=replied_msg.caption or "", reply_markup=reply_markup, parse_mode="Markdown")
+                    m = await context.bot.send_photo(chat_id=user, photo=replied_msg.photo[-1].file_id, caption=replied_msg.caption or "", reply_markup=reply_markup, parse_mode="Markdown")
                 elif replied_msg.text:
-                    await context.bot.send_message(chat_id=user, text=replied_msg.text, reply_markup=reply_markup, parse_mode="Markdown")
+                    m = await context.bot.send_message(chat_id=user, text=replied_msg.text, reply_markup=reply_markup, parse_mode="Markdown")
+                db_save_broadcast_msg(b_id, user, m.message_id)
                 success += 1
             except Exception:
                 db_remove_user(user)
@@ -353,12 +451,43 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+    # ⏳ 24 Hours Auto-Delete Set (86400 seconds)
+    asyncio.create_task(auto_delete_broadcast_after_delay(context, b_id, 86400))
+
     await status_msg.edit_text(
-        f"✅ **Broadcast Completed!**\n\n"
+        f"✅ **Forward Broadcast Completed!**\n\n"
         f"✅ Success : `{success}`\n"
-        f"❌ Failed : `{failed}`",
+        f"❌ Failed : `{failed}`\n\n"
+        f"⏳ *This broadcast will Auto-Delete in 24 Hours.*\n"
+        f"🗑️ *Or use `/delete` to delete it right now!*",
         parse_mode="Markdown"
     )
+
+async def delete_last_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    b_id = db_get_last_broadcast()
+    if not b_id:
+        await update.message.reply_text("⚠️ **No active broadcast found to delete.**", parse_mode="Markdown")
+        return
+
+    msgs = db_get_broadcast_msgs(b_id)
+    total = len(msgs)
+    deleted = 0
+
+    status_msg = await update.message.reply_text(f"🗑️ **Deleting Last Broadcast...**\nProgress: `0/{total}`", parse_mode="Markdown")
+
+    for user_id, msg_id in msgs:
+        try:
+            await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+            deleted += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+
+    db_clear_broadcast_msgs(b_id)
+    await status_msg.edit_text(f"✅ **Deleted Broadcast from `{deleted}/{total}` users successfully!**", parse_mode="Markdown")
 
 async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -376,19 +505,35 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/ping` - Response Latency\n"
         "• `/backup <link>` - Change Backup Link\n"
         "• `/setwelcome` - Change Welcome Msg/Photo\n"
-        "• `/broadcast <text>` - Send Text Broadcast\n"
-        "• `/fbroadcast` - Forward Broadcast (Reply to post)\n"
+        "• `/broadcast <text>` - Send Text Broadcast (Auto-deletes in 24h)\n"
+        "• `/fbroadcast` - Forward Broadcast (Auto-deletes in 24h)\n"
+        "• `/delete` - Manually Delete Last Broadcast Now\n"
         "• `/restart` - Reboot Bot\n"
         "• `/help` - Show Help"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
+
+async def post_init(application: Application):
+    commands = [
+        BotCommand("stats", "View Bot Statistics & Config"),
+        BotCommand("users", "Check Total User Count"),
+        BotCommand("ping", "Response Latency"),
+        BotCommand("backup", "Change Backup Channel Link"),
+        BotCommand("setwelcome", "Set New Welcome Msg/Photo"),
+        BotCommand("broadcast", "Send Text Broadcast"),
+        BotCommand("fbroadcast", "Send Forward Post Broadcast"),
+        BotCommand("delete", "Delete Last Broadcast Now"),
+        BotCommand("restart", "Reboot Bot Server"),
+        BotCommand("help", "Show Admin Help Menu"),
+    ]
+    await application.bot.set_my_commands(commands)
 
 def main():
     t = Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ping", ping))
@@ -396,16 +541,4 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("backup", set_backup))
     app.add_handler(CommandHandler("setwelcome", set_welcome_cmd))
-    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
-    app.add_handler(CommandHandler("fbroadcast", forward_broadcast))
-    app.add_handler(CommandHandler("restart", restart_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
-
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_welcome_input))
-    app.add_handler(ChatJoinRequestHandler(auto_accept_request))
-
-    print("Bot is running...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
+    app.add_handler(CommandHandler("broadca
