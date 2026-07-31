@@ -541,7 +541,7 @@ def main():
     app.add_handler(CommandHandler("setwelcome", set_welcome_cmd))
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("fbroadcast", forward_broadcast))
-        app.add_handler(CommandHandler("delete", delete_last_broadcast))
+    app.add_handler(CommandHandler("delete", delete_last_broadcast))
     app.add_handler(CommandHandler("restart", restart_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
 
