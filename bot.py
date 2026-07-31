@@ -21,7 +21,6 @@ from telegram.error import TelegramError, Forbidden, BadRequest, RetryAfter
 # Environment Variables
 TOKEN = os.getenv("BOT_TOKEN", "8919865202:AAFfW5bDcrIypxKfJWiLJHfZRH4at8HiB_c")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6518835352"))
-LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID", None)  # Example: -1001234567890
 
 # Flask Web Server
 web_app = Flask(__name__)
@@ -113,20 +112,6 @@ def db_get_user_count():
     conn.close()
     return count
 
-# 🚨 Log Error Function
-async def log_error(context: ContextTypes.DEFAULT_TYPE, user_id: int, command: str, error_msg: str):
-    if LOG_CHANNEL_ID:
-        try:
-            log_text = (
-                f"❌ **Error Occurred**\n\n"
-                f"👤 **User:** `{user_id}`\n"
-                f"🛠️ **Command/Action:** `{command}`\n\n"
-                f"📝 **Error Details:**\n`{error_msg}`"
-            )
-            await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=log_text, parse_mode="Markdown")
-        except Exception as e:
-            print(f"Failed to log error to channel: {e}")
-
 # State for /setwelcome
 AWAITING_WELCOME = {}
 
@@ -136,29 +121,15 @@ async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = request.chat.id
     user_id = request.from_user.id
     user_name = request.from_user.first_name
-    username = f"@{request.from_user.username}" if request.from_user.username else "None"
 
     # Approve Request
     try:
         await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
     except Exception as e:
-        await log_error(context, user_id, "Auto Approve", str(e))
+        print(f"Error approving request: {e}")
 
+    # Database मध्ये User Save करणे
     db_add_user(user_id)
-
-    # Log to Private Log Channel
-    if LOG_CHANNEL_ID:
-        try:
-            log_msg = (
-                f"🎉 **New User Joined**\n\n"
-                f"👤 **Name:** {user_name}\n"
-                f"🔗 **Username:** {username}\n"
-                f"🆔 **ID:** `{user_id}`\n"
-                f"⏰ **Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=log_msg, parse_mode="Markdown")
-        except Exception as e:
-            print(f"Log error: {e}")
 
     # Send Welcome Message on Channel
     backup_link = db_get_setting("backup_link")
@@ -185,11 +156,11 @@ async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode="Markdown"
             )
         
-        # ⏳ 5 Days Auto-Delete
+        # ⏳ 5 Days Auto-Delete (432000 seconds)
         asyncio.create_task(delete_msg_after_delay(context, chat_id, sent_msg.message_id, 432000))
 
     except Exception as e:
-        await log_error(context, user_id, "Welcome Message", str(e))
+        print(f"Error sending welcome message: {e}")
 
 async def delete_msg_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay_seconds: int):
     await asyncio.sleep(delay_seconds)
@@ -294,7 +265,6 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user, text=message_text, parse_mode="Markdown")
             success += 1
         except (Forbidden, BadRequest):
-            # Dead user -> Remove from database
             db_remove_user(user)
             failed += 1
         except RetryAfter as e:
@@ -305,13 +275,11 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 db_remove_user(user)
                 failed += 1
-        except Exception as e:
+        except Exception:
             failed += 1
 
-        # Flood control delay
         await asyncio.sleep(0.08)
 
-        # Progress Update every 50 users
         if i % 50 == 0 or i == total:
             try:
                 await status_msg.edit_text(
@@ -444,9 +412,7 @@ def main():
     app.add_handler(CommandHandler("restart", restart_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
 
-    # Message Handler for /setwelcome
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_welcome_input))
-
     app.add_handler(ChatJoinRequestHandler(auto_accept_request))
 
     print("Bot is running...")
