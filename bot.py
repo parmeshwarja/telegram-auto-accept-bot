@@ -7,7 +7,7 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, ChatJoinRequestHandler, CommandHandler, ContextTypes
 
-# Render चा Timed Out टाळण्यासाठी छोटा Flask वेब सर्व्हर
+# Render साठी Flask वेब सर्व्हर
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -18,7 +18,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     web_app.run(host='0.0.0.0', port=port)
 
-# Setup basic logging
+# Logging सेटअप
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
     level=logging.INFO
@@ -48,22 +48,39 @@ async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     request = update.chat_join_request
     chat_id = request.chat.id
     user_id = request.from_user.id
-    user_name = request.from_user.first_name
+    user_name = request.from_user.first_name  # युझरचे नाव ऑटोमॅटिक घेईल
+
+    # 🎨 आकर्षक Welcome Image URL
+    WELCOME_IMAGE_URL = "[attachment_0](attachment)"
+
+    # ✨ Attractive English Welcome Message
+    welcome_caption = (
+        f"🎉 Welcome aboard, {user_name}! 🎉\n\n"
+        f"✅ Your request to join has been approved successfully!\n\n"
+        f"🌟 We're thrilled to have you in our community!\n"
+        f"Get ready for premium content, regular updates, and much more.\n\n"
+        f"👉 *Enjoy your time here!*"
+    )
 
     try:
+        # १. जॉईन रिक्वेस्ट स्वीकारणे
         await context.bot.approve_chat_join_request(
             chat_id=chat_id, 
             user_id=user_id
         )
         print(f"Accepted {user_name} (ID: {user_id}) into Chat ID: {chat_id}")
 
+        # २. युझर ID सेव्ह करणे
         if user_id not in saved_users:
             saved_users.add(user_id)
             save_users(saved_users)
 
-        await context.bot.send_message(
+        # ३. आकर्षक Welcome Photo सोबत मेसेज पाठवणे
+        await context.bot.send_photo(
             chat_id=user_id,
-            text=f"नमस्कार {user_name}! तुमची जॉईन रिक्वेस्ट स्वीकारली गेली आहे."
+            photo=WELCOME_IMAGE_URL,
+            caption=welcome_caption,
+            parse_mode="Markdown"
         )
 
     except Exception as e:
@@ -73,11 +90,11 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_id = update.effective_user.id
 
     if sender_id != ADMIN_ID:
-        await update.message.reply_text("तुम्हाला ही कमांड वापरण्याची परवानगी नाही!")
+        await update.message.reply_text("You are not authorized to use this command!")
         return
 
     if not context.args:
-        await update.message.reply_text("कृपया पाठवायचा मेसेज लिहा. उदाहरण:\n/broadcast नमस्कार सर्वांना!")
+        await update.message.reply_text("Please provide a message. Example:\n/broadcast Hello everyone!")
         return
 
     message_text = " ".join(context.args)
@@ -85,7 +102,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success = 0
     failed = 0
 
-    await update.message.reply_text(f"ब्रॉडकास्ट सुरू होत आहे... एकूण युझर्स: {total_users}")
+    await update.message.reply_text(f"Starting broadcast... Total users: {total_users}")
 
     for user in list(saved_users):
         try:
@@ -95,15 +112,13 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             failed += 1
 
-    await update.message.reply_text(f"✅ ब्रॉडकास्ट पूर्ण झाले!\nयशस्वी: {success}\nनिष्फळ: {failed}")
+    await update.message.reply_text(f"✅ Broadcast finished!\nSuccess: {success}\nFailed: {failed}")
 
 def main():
-    # Flask वेब सर्व्हर बॅकग्राउंडला सुरू करा
     t = Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    # Telegram Bot सुरु करा
     app = Application.builder().token(TOKEN).build()
     app.add_handler(ChatJoinRequestHandler(auto_accept_request))
     app.add_handler(CommandHandler("broadcast", broadcast))
