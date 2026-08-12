@@ -342,7 +342,7 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             m = await context.bot.send_message(chat_id=user, text=message_text, parse_mode="Markdown")
             db_save_broadcast_msg(b_id, user, m.message_id)
             success += 1
-        except (Forbidden, BadRequest):
+        except Forbidden:
             db_remove_user(user)
             failed += 1
         except RetryAfter as e:
@@ -352,20 +352,19 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db_save_broadcast_msg(b_id, user, m.message_id)
                 success += 1
             except Exception:
-                db_remove_user(user)
                 failed += 1
         except Exception:
             failed += 1
 
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.05)
 
-        if i % 50 == 0 or i == total:
+        if i % 30 == 0 or i == total:
             try:
                 await status_msg.edit_text(
                     f"🚀 **Sending...**\n"
                     f"`{i}/{total}` Users\n\n"
                     f"✅ Success: `{success}`\n"
-                    f"❌ Failed/Removed: `{failed}`",
+                    f"❌ Failed: `{failed}`",
                     parse_mode="Markdown"
                 )
             except Exception:
@@ -376,7 +375,7 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(
         f"✅ **Broadcast Completed!**\n\n"
         f"✅ Success : `{success}`\n"
-        f"❌ Failed/Removed Dead Users : `{failed}`\n\n"
+        f"❌ Failed : `{failed}`\n\n"
         f"⏳ *This broadcast will Auto-Delete in 24 Hours.*\n"
         f"🗑️ *Or use `/delete` to delete it right now!*",
         parse_mode="Markdown"
@@ -396,49 +395,46 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     b_id = db_create_broadcast()
     status_msg = await update.message.reply_text(f"🚀 **Forward Broadcast Started...**\nProgress: `0/{total}`", parse_mode="Markdown")
+    
     backup_link = db_get_setting("backup_link")
-    reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Join Backup Channel", url=backup_link)]])
+    reply_markup = None
+    if backup_link:
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Join Backup Channel", url=backup_link)]])
 
     for i, user in enumerate(all_users, start=1):
         try:
-            if replied_msg.photo:
-                m = await context.bot.send_photo(
-                    chat_id=user,
-                    photo=replied_msg.photo[-1].file_id,
-                    caption=replied_msg.caption if replied_msg.caption else "",
-                    reply_markup=reply_markup,
-                    parse_mode="Markdown"
-                )
-            elif replied_msg.text:
-                m = await context.bot.send_message(
-                    chat_id=user,
-                    text=replied_msg.text,
-                    reply_markup=reply_markup,
-                    parse_mode="Markdown"
-                )
+            # copy_message मुळे Photo, Video, Document, Text सर्व व्यवस्थित कॉपी होईल
+            m = await context.bot.copy_message(
+                chat_id=user,
+                from_chat_id=replied_msg.chat_id,
+                message_id=replied_msg.message_id,
+                reply_markup=reply_markup
+            )
             db_save_broadcast_msg(b_id, user, m.message_id)
             success += 1
-        except (Forbidden, BadRequest):
+        except Forbidden:
+            # युजरने बॉट ब्लॉक केल्यासच डिलीट करा
             db_remove_user(user)
             failed += 1
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
             try:
-                if replied_msg.photo:
-                    m = await context.bot.send_photo(chat_id=user, photo=replied_msg.photo[-1].file_id, caption=replied_msg.caption or "", reply_markup=reply_markup, parse_mode="Markdown")
-                elif replied_msg.text:
-                    m = await context.bot.send_message(chat_id=user, text=replied_msg.text, reply_markup=reply_markup, parse_mode="Markdown")
+                m = await context.bot.copy_message(
+                    chat_id=user,
+                    from_chat_id=replied_msg.chat_id,
+                    message_id=replied_msg.message_id,
+                    reply_markup=reply_markup
+                )
                 db_save_broadcast_msg(b_id, user, m.message_id)
                 success += 1
             except Exception:
-                db_remove_user(user)
                 failed += 1
         except Exception:
             failed += 1
 
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.05)
 
-        if i % 50 == 0 or i == total:
+        if i % 30 == 0 or i == total:
             try:
                 await status_msg.edit_text(
                     f"🚀 **Sending...**\n"
@@ -482,7 +478,7 @@ async def delete_last_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
             deleted += 1
         except Exception:
             pass
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.03)
 
     db_clear_broadcast_msgs(b_id)
     await status_msg.edit_text(f"✅ **Deleted Broadcast from `{deleted}/{total}` users successfully!**", parse_mode="Markdown")
