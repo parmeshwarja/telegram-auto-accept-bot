@@ -16,6 +16,8 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     BotCommand,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
@@ -2272,14 +2274,42 @@ async def help_cmd(
 
 
 # =========================================================
-# POST INIT
+# POST INIT (ADMIN VS NORMAL USER MENU)
 # =========================================================
 
 async def post_init(
     application: Application
 ):
 
-    commands = [
+    # -----------------------------------------------------
+    # 1. NORMAL USERS MENU (फक्त ३ कमांड्स दिसतील)
+    # -----------------------------------------------------
+
+    user_commands = [
+        BotCommand(
+            "start",
+            "Start Bot"
+        ),
+        BotCommand(
+            "addchannel",
+            "Add Channel"
+        ),
+        BotCommand(
+            "mychannels",
+            "View My Channels"
+        ),
+    ]
+
+    await application.bot.set_my_commands(
+        commands=user_commands,
+        scope=BotCommandScopeAllPrivateChats()
+    )
+
+    # -----------------------------------------------------
+    # 2. ADMIN MENU (एडमिनला सर्व कमांड्स दिसतील)
+    # -----------------------------------------------------
+
+    admin_commands = [
 
         BotCommand(
             "start",
@@ -2347,9 +2377,16 @@ async def post_init(
         ),
     ]
 
-    await application.bot.set_my_commands(
-        commands
-    )
+    try:
+        await application.bot.set_my_commands(
+            commands=admin_commands,
+            scope=BotCommandScopeChat(chat_id=ADMIN_ID)
+        )
+    except Exception as e:
+        logger.error(
+            "Could not set admin commands: %s",
+            e
+        )
 
 
 # =========================================================
