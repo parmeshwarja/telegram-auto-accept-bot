@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import asyncio
+import logging
 from threading import Thread
 from flask import Flask
 from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
@@ -15,11 +16,15 @@ from telegram.ext import (
 )
 from telegram.error import Forbidden, BadRequest, RetryAfter
 
-# --- CONFIGURATION & DUMMY DATABASE FUNCTIONS ---
+# --- LOGGING SETUP ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- CONFIGURATION & DATABASE STUB ---
 ADMIN_ID = 12345678  # तुमचा Admin Telegram ID टाका
 TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")  # तुमचा Bot Token टाका
 
-# डेटाबेस फंक्शन्स (जर तुमच्याकडे आधीच डेटाबेस कोड असेल तर ते फंक्शन इथे जोडा)
+# डेटाबेस डिक्शनरी (तुमचा मूळ डेटाबेस असला तर तो इथे कनेक्ट करा)
 USERS_DB = set()
 SETTINGS_DB = {"backup_link": ""}
 BROADCAST_DB = {}
@@ -57,25 +62,24 @@ def db_clear_broadcast_msgs(b_id):
     if b_id in BROADCAST_DB:
         del BROADCAST_DB[b_id]
 
-# --- FLASK SERVER (For Webhook / Railway Uptime) ---
+# --- FLASK SERVER (Uptime / Health Check) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Bot is alive!"
+    return "Bot is running perfectly!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     web_app.run(host="0.0.0.0", port=port)
 
-# --- COMMAND HANDLERS ---
+# --- BOT HANDLERS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db_add_user(user_id)
-    await update.message.reply_text("👋 Welcome to the Bot!")
+    await update.message.reply_text("👋 **Welcome to the Bot!**", parse_mode="Markdown")
 
-# एरर फिक्स: 'ping' फंक्शन इथे ॲड केले आहे
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_time = time.time()
     msg = await update.message.reply_text("🏓 Pinging...")
@@ -94,28 +98,28 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     total_users = len(db_get_all_users())
     backup = db_get_setting("backup_link") or "Not Set"
-    await update.message.reply_text(f"📊 **Stats:**\nUsers: {total_users}\nBackup Link: {backup}")
+    await update.message.reply_text(f"📊 **Stats:**\nUsers: `{total_users}`\nBackup Link: {backup}", parse_mode="Markdown")
 
 async def set_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if not context.args:
-        await update.message.reply_text("Usage: `/backup https://t.me/...`", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Usage: `/backup https://t.me/your_link`", parse_mode="Markdown")
         return
     link = context.args[0]
     db_set_setting("backup_link", link)
-    await update.message.reply_text(f"✅ Backup link set to: {link}")
+    await update.message.reply_text(f"✅ **Backup Link successfully set to:**\n{link}", parse_mode="Markdown")
 
 async def set_welcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    await update.message.reply_text("Send the new welcome message text/photo.")
+    await update.message.reply_text("⚙️ Send the new welcome message text/photo.")
 
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     if not context.args:
-        await update.message.reply_text("Usage: `/broadcast Your message here`", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Usage: `/broadcast Your message here`", parse_mode="Markdown")
         return
     text = " ".join(context.args)
     all_users = db_get_all_users()
@@ -129,28 +133,45 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_welcome_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass
 
+# --- AUTO ACCEPT CHAT JOIN REQUEST (FIXED) ---
 async def auto_accept_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_join_request = update.chat_join_request
     user_id = chat_join_request.from_user.id
-    db_add_user(user_id)
+    db_add_user(user_id)  # ID सेव्ह केली
 
     try:
+        # १. चॅनेल जॉईन रिक्वेस्ट एक्सेप्ट करा
         await chat_join_request.approve()
+        logger.info(f"Approved join request for user: {user_id}")
+        
+        # २. बॅकअप लिंक तपासा
         backup_link = db_get_setting("backup_link")
+        
         if backup_link:
             reply_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔗 Join Backup Channel", url=backup_link)]
             ])
-            text = "✅ **Your join request has been approved!**\n\nJoin our backup channel:"
+            text = "✅ **Your join request has been approved!**\n\nJoin our backup channel to stay updated:"
             await context.bot.send_message(
                 chat_id=user_id,
                 text=text,
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
+            logger.info(f"Sent backup link to user: {user_id}")
+        else:
+            # बॅकअप लिंक सेट नसली तरी युझरला मेसेज पाठवणे
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="✅ **Your join request has been approved!** Welcome!",
+                parse_mode="Markdown"
+            )
+            logger.warning("Backup link was not set in DB!")
+            
     except Exception as e:
-        print(f"Error in auto_accept_request: {e}")
+        logger.error(f"Error in auto_accept_request for {user_id}: {e}")
 
+# --- BROADCAST HANDLERS ---
 async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -215,7 +236,7 @@ async def forward_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
     await status_msg.edit_text(
-        f"✅ **Forward Broadcast Completed!**\n\n✅ Success : {success}\n❌ Failed : {failed}\n\n🗑️ *Use /delete to delete this broadcast manually if needed.*",
+        f"✅ **Forward Broadcast Completed!**\n\n✅ Success : {success}\n❌ Failed : {failed}\n\n🗑️ *Use /delete to delete this broadcast manually.*",
         parse_mode="Markdown"
     )
 
